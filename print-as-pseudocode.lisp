@@ -4,9 +4,9 @@
   (:import-from fiveam
                 def-test def-suite is is-true is-false)
   (:import-from alexandria
-                once-only)
+                once-only curry rcurry)
   (:import-from gefjon-utils
-                define-class)
+                define-class with-slot-accessors)
   (:use cl iterate))
 (in-package print-as-pseudocode/print-as-pseudocode)
 
@@ -116,6 +116,7 @@
                  (&optional (apply #'print-optional-arg more-args))
                  (&rest (apply #'print-rest-arg more-args))
                  (&key (apply #'print-key-arg more-args))
+                 (&aux (apply #'print-aux-arg more-args))
                  (otherwise
                   (maybe-comma)
                   (write-as-pseudocode arg stream)
@@ -125,6 +126,7 @@
                (case arg
                  (&rest (apply #'print-rest-arg more-args))
                  (&key (apply #'print-key-arg more-args))
+                 (&aux (apply #'print-aux-arg more-args))
                  (otherwise
                   (maybe-comma)
                   (write-one-optional-arg stream arg)
@@ -132,6 +134,7 @@
            (print-rest-arg (&optional arg &rest more-args)
              (when arg
                (case arg
+                 (&aux (apply #'print-aux-arg more-args))
                  (&key (apply #'print-key-arg more-args))
                  (otherwise
                   (maybe-comma)
@@ -141,12 +144,17 @@
            (print-key-arg (&optional arg &rest more-args)
              (when arg
                (case arg
-                 (&allow-other-keys (assert (not more-args))
-                  nil)
+                 (&aux (apply #'print-aux-arg more-args))
+                 (&allow-other-keys (apply #'print-key-arg more-args))
                  (otherwise
                   (maybe-comma)
                   (write-one-optional-arg stream arg)
-                  (apply #'print-key-arg more-args))))))
+                  (apply #'print-key-arg more-args)))))
+           (print-aux-arg (&optional arg &rest more-args)
+             (when arg
+               (maybe-comma)
+               (write-one-optional-arg stream arg)
+               (apply #'print-aux-arg more-args))))
     (write-char #\( stream)
     (pprint-logical-block (stream arglist)
       (apply #'print-normal-arg arglist)))
@@ -211,9 +219,9 @@
      (pprint-newline :mandatory ,stream)
      (write-char #\} ,stream)))
 
-(defun write-progn (stream exprs)
+(defun write-progn (exprs stream)
   (when (list-of-progn-p exprs)
-    (return-from write-progn (write-progn stream (rest (first exprs)))))
+    (return-from write-progn (write-progn (rest (first exprs)) stream)))
 
   (with-block stream
     (iter (for expr in exprs)
@@ -222,7 +230,7 @@
       (write-as-pseudocode expr stream))))
 
 (define-form (progn &rest exprs) (stream)
-  (write-progn stream exprs))
+  (write-progn exprs stream))
 
 (define-form (lambda arglist &body body) (stream)
   (write-string "function" stream)
@@ -255,18 +263,21 @@
     (write-as-pseudocode name stream)
     (write-lambda-list arglist stream)
     (write-char #\space stream)
-    (write-progn stream body)))
+    (write-progn body stream)))
 
 (define-form (defun &rest fn) (stream)
   (write-defun stream fn))
 
-(defun write-let-binding (stream binding)
+(defun write-let-binding (stream binding
+                          &key (kind "let")
+                            (write-binding #'write-as-pseudocode))
   (destructuring-bind (name initform)
       (etypecase binding
         (list binding)
         (symbol (list binding nil)))
-    (write-string "let " stream)
-    (write-as-nested-lists name stream)
+    (write-string kind stream)
+    (write-char #\space stream)
+    (funcall write-binding name stream)
     (write-string " = " stream)
     (write-as-pseudocode initform stream))
   (values))
@@ -346,7 +357,7 @@
 
 (define-form (iter &body body) (stream)
   (write-string "iterate " stream)
-  (write-progn stream body))
+  (write-progn body stream))
 
 (defun write-iter-form (stream head thing other-things)
   (write-as-pseudocode head stream)
@@ -369,7 +380,9 @@
           (collect `(define-form (,head thing &rest other-things) (stream)
                       (write-iter-form stream ',head thing other-things))))))
 
-(define-iter-forms for
+(define-iter-forms
+  ;; variable bindings
+  for with
   ;; reductions
   sum summing
   multiply multiplying
@@ -398,27 +411,27 @@
 
 (define-form (finally &body body) (stream)
   (write-string "finally " stream)
-  (write-progn stream body))
+  (write-progn body stream))
 
 (define-form (if test then else) (stream)
   (write-string "if " stream)
   (write-maybe-parenthesized test stream)
   (write-char #\space stream)
-  (write-progn stream (list then))
+  (write-progn (list then) stream)
   (write-string " else " stream)
-  (write-progn stream (list else)))
+  (write-progn (list else) stream))
 
 (define-form (when test &body body) (stream)
   (write-string "if " stream)
   (write-maybe-parenthesized test stream)
   (write-char #\space stream)
-  (write-progn stream body))
+  (write-progn body stream))
 
 (define-form (unless test &body body) (stream)
   (write-string "if " stream)
   (write-prefix stream '! test)
   (write-char #\space stream)
-  (write-progn stream body))
+  (write-progn body stream))
 
 (define-form (return thing) (stream)
   (write-string "return " stream)
@@ -435,7 +448,7 @@
   (write-as-pseudocode name stream)
   (write-lambda-list arglist stream)
   (write-char #\space stream)
-  (write-progn stream body))
+  (write-progn body stream))
 
 (define-form (#+sbcl sb-int:quasiquote thing) (stream)
   (write-string "syntax template: " stream)
@@ -477,7 +490,7 @@
   ;; FIXME: rewrite in terms of WRITE-LAMBDA-LIST
   (write-arglist arglist stream :recurse #'write-specializer)
   (write-char #\space stream)
-  (write-progn stream body))
+  (write-progn body stream))
 
 (define-form (defgeneric name arglist &rest stuff) (stream)
   (declare (ignore stuff))
@@ -495,7 +508,7 @@
         (pprint-newline :mandatory stream))
       (write-as-pseudocode thing stream)
       (write-string " -> " stream)
-      (write-progn stream body))))
+      (write-progn body stream))))
 
 (define-form (etypecase term &body clauses) (stream)
   (apply #'write-case stream `(type-of ,term) clauses))
@@ -510,7 +523,7 @@
     (write-string "if " stream)
     (write-maybe-parenthesized test stream)
     (write-char #\space stream)
-    (write-progn stream then)))
+    (write-progn then stream)))
 
 (define-form (make-instance class &rest pairs) (stream)
   (write-string "construct " stream)
@@ -551,7 +564,7 @@
     (write-string "in suite " stream)
     (write-as-pseudocode suite stream)
     (write-char #\space stream))
-  (write-progn stream body))
+  (write-progn body stream))
 
 (define-form (map result-type function &rest sequences) (stream)
   (declare (ignore result-type))
@@ -595,7 +608,8 @@
 
 (define-form (destructuring-bind pattern term &body body) (stream)
   (write-local-bindings stream
-                        #'write-let-binding
+                        (rcurry #'write-let-binding
+                                :write-binding #'write-lambda-list)
                         `((,pattern ,term))
                         body))
 
@@ -615,3 +629,29 @@
                       (write-infix stream ',op numbers))))))
 
 (define-orders < <= > >=)
+
+(define-form (with-slot-accessors slots instance &body body) (stream)
+  (write-local-bindings stream
+                        (rcurry #'write-let-binding
+                                :kind "unpack"
+                                :write-binding #'write-progn)
+                        `((,slots ,instance))
+                        body))
+
+(define-form (assert condition &rest stuff) (stream)
+  (declare (ignore stuff))
+  (write-string "assert " stream)
+  (write-as-pseudocode condition stream))
+
+(define-form (with-output-to-string stuff &body body) (stream)
+  (declare (ignore stuff))
+  (write-string "print_to_string " stream)
+  (write-progn body stream))
+
+(define-form (dotimes (var count) &body body) (stream)
+  (write-string "for " stream)
+  (write-as-pseudocode var stream)
+  (write-string " from 0 below " stream)
+  (write-as-pseudocode count stream)
+  (write-char #\space stream)
+  (write-progn body stream))
