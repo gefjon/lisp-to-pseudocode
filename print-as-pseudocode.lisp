@@ -4,9 +4,9 @@
   (:import-from fiveam
                 def-test def-suite is is-true is-false)
   (:import-from alexandria
-                once-only curry rcurry)
+                once-only curry rcurry set-equal)
   (:import-from gefjon-utils
-                define-class with-slot-accessors)
+                define-class with-slot-accessors define-special)
   (:use cl iterate))
 (in-package print-as-pseudocode/print-as-pseudocode)
 
@@ -24,6 +24,7 @@
   (with-open-file (out destination-file
                        :direction :output
                        :if-exists :supersede)
+    (write-line "// -*- mode: c -*-" out)
     (iter (for form in-file source-file)
       (unless (first-time-p)
         (terpri out))
@@ -52,12 +53,34 @@
   (write-char #\- stream)
   (values))
 
+(defun normalize-identifier (ident)
+  (substitute-if #\_ (rcurry #'member '(#\. #\- #\/ #\*) :test #'char=)
+                 (string-downcase ident)))
+
 (defmethod write-as-pseudocode ((symbol symbol) stream)
-  (write-string (substitute #\_ #\- (string-downcase (symbol-name symbol)))
+  (write-string (normalize-identifier (symbol-name symbol))
                 stream)
   (values))
 
 (defgeneric write-form (stream head &rest tail))
+
+(define-special *first-kwarg-printed-p* boolean)
+
+(defmacro with-kwargs (stream &body body)
+  `(let* ((*first-kwarg-printed-p* nil))
+     (write-char #\space ,stream)
+     (pprint-logical-block (,stream nil)
+       ,@body)))
+
+(defun write-kwarg (stream predicate description value)
+  (when predicate
+    (if *first-kwarg-printed-p*
+        (progn (write-char #\space stream)
+               (pprint-newline :fill stream))
+      (setf *first-kwarg-printed-p* t))
+    (write-string description stream)
+    (write-char #\space stream)
+    (write-maybe-parenthesized value stream)))
 
 (defgeneric write-maybe-parenthesized (expr stream)
   (:method ((symbol symbol) stream)
@@ -257,6 +280,20 @@
     (pprint-newline :mandatory stream)
     (apply #'write-form stream 'setf others)))
 
+(defun write-inc-dec (stream direction place delta)
+  (write-string direction stream)
+  (write-char #\space stream)
+  (write-as-pseudocode place stream)
+  (when delta
+    (write-string " by " stream)
+    (write-as-pseudocode delta stream)))
+
+(define-form (incf place &optional delta) (stream)
+  (write-inc-dec stream "increment" place delta))
+
+(define-form (decf place &optional delta) (stream)
+  (write-inc-dec stream "decrement" place delta))
+
 (defun write-defun (stream fn)
   (destructuring-bind (name arglist &body body) fn
     (write-string "function " stream)
@@ -285,6 +322,10 @@
 (define-form (defparameter name value) (stream)
   (write-let-binding stream (list name value)))
 
+(define-form (let bindings &body body) (stream)
+  (write-local-bindings stream #'write-let-binding bindings body)
+  (values))
+
 (define-form (let* bindings &body body) (stream)
   (write-local-bindings stream #'write-let-binding bindings body)
   (values))
@@ -295,38 +336,38 @@
       (unless (first-time-p)
         (pprint-newline :fill stream)
         (write-char #\space stream)
-        (write-as-pseudocode operator stream)
+        (write-string operator stream)
         (write-char #\space stream))
       (write-maybe-parenthesized operand stream))))
 
 (defun write-prefix (stream operator operand)
-  (write-as-pseudocode operator stream)
+  (write-string operator stream)
   (write-maybe-parenthesized operand stream))
 
 (define-form (+ &rest operands) (stream)
-  (write-infix stream '+ operands))
+  (write-infix stream "+" operands))
 
 (define-form (- &rest operands) (stream)
   (if (= (length operands) 1)
-      (write-prefix stream '- (first operands))
-      (write-infix stream '- operands)))
+      (write-prefix stream "-" (first operands))
+      (write-infix stream "-" operands)))
 
 (define-form (* &rest operands) (stream)
-  (write-infix stream '* operands))
+  (write-infix stream "*" operands))
 
 (define-form (/ &rest operands) (stream)
   (if (= (length operands) 1)
-      (write-infix stream '/ (cons 1 operands))
-      (write-infix stream '/ operands)))
+      (write-infix stream "/" (cons 1 operands))
+      (write-infix stream "/" operands)))
 
 (define-form (not thing) (stream)
-  (write-prefix stream '! thing))
+  (write-prefix stream "!" thing))
 
 (define-form (and &rest operands) (stream)
-  (write-infix stream '&& operands))
+  (write-infix stream "&&" operands))
 
 (define-form (or &rest operands) (stream)
-  (write-infix stream '\|\| operands))
+  (write-infix stream "||" operands))
 
 (define-form (flet functions &body body) (stream)
   (write-local-bindings stream #'write-defun functions body))
@@ -339,7 +380,7 @@
 
 (define-form 'thing (stream)
   (etypecase thing
-    (symbol (write-as-pseudocode (string-downcase (symbol-name thing)) stream))
+    (symbol (write-as-pseudocode (normalize-identifier (symbol-name thing)) stream))
     (list (write-as-nested-lists thing stream))))
 
 (define-form (list &rest stuff) (stream)
@@ -358,6 +399,9 @@
 (define-form (iter &body body) (stream)
   (write-string "iterate " stream)
   (write-progn body stream))
+
+(define-form (next-iteration) (stream)
+  (write-string "continue" stream))
 
 (defun write-iter-form (stream head thing other-things)
   (write-as-pseudocode head stream)
@@ -429,7 +473,7 @@
 
 (define-form (unless test &body body) (stream)
   (write-string "if " stream)
-  (write-prefix stream '! test)
+  (write-prefix stream "!" test)
   (write-char #\space stream)
   (write-progn body stream))
 
@@ -537,6 +581,23 @@
       (write-string ": " stream)
       (write-as-pseudocode initform stream))))
 
+(define-form (make-array dimensions
+                         &key (initial-element nil initial-element-p)
+                         (initial-contents nil initial-contents-p)
+                         adjustable
+                         (element-type nil element-type-p)
+                         &allow-other-keys)
+    (stream)
+  (write-string "new " stream)
+  (when adjustable
+    (write-string "adjustable " stream))
+  (write-string "array" stream)
+  (with-kwargs stream
+    (write-kwarg stream t "with dimensions" dimensions)
+    (write-kwarg stream element-type-p "whose elements are of type" element-type)
+    (write-kwarg stream initial-element-p "all initialized to" initial-element)
+    (write-kwarg stream initial-contents-p "initially containing" initial-contents)))
+
 (define-form (aref arr &rest indices) (stream)
   (write-as-pseudocode arr stream)
   (write-arglist indices stream :open "[" :close "]"))
@@ -559,11 +620,9 @@
 (define-form (def-test name (&key suite &allow-other-keys) &body body) (stream)
   (write-string "test " stream)
   (write-as-pseudocode name stream)
+  (with-kwargs stream
+    (write-kwarg stream suite "in suite" suite))
   (write-char #\space stream)
-  (when suite
-    (write-string "in suite " stream)
-    (write-as-pseudocode suite stream)
-    (write-char #\space stream))
   (write-progn body stream))
 
 (define-form (map result-type function &rest sequences) (stream)
@@ -587,9 +646,23 @@
   (cons 'progn
         (iter (for op in operators)
           (collect `(define-form (,op &rest stuff) (stream)
-                      (write-infix stream '== stuff))))))
+                      (write-infix stream "==" stuff))))))
 
 (define-equality eq eql equal equalp = char= string=)
+
+(define-form (set-equal list1 list2 &key key &allow-other-keys) (stream)
+  (write-string "are the sets " stream)
+  (pprint-logical-block (stream nil)
+    (write-as-pseudocode list1 stream)
+    (write-char #\space stream)
+    (pprint-newline :fill stream)
+    (write-string "and " stream)
+    (write-as-pseudocode list2 stream)
+    (write-char #\space stream)
+    (pprint-newline :fill stream)
+    (write-string "equal" stream)
+    (with-kwargs stream
+      (write-kwarg stream key "keyed on" key))))
 
 (define-form (is test &rest stuff) (stream)
   (declare (ignore stuff))
@@ -626,7 +699,7 @@
   (cons 'progn
         (iter (for op in order-ops)
           (collect `(define-form (,op &rest numbers) (stream)
-                      (write-infix stream ',op numbers))))))
+                      (write-infix stream ,(symbol-name op) numbers))))))
 
 (define-orders < <= > >=)
 
@@ -655,3 +728,18 @@
   (write-as-pseudocode count stream)
   (write-char #\space stream)
   (write-progn body stream))
+
+(define-form (error datum &rest args) (stream)
+  (write-string "error " stream)
+  (pprint-logical-block (stream nil)
+    (write-as-pseudocode datum stream)
+    (when args
+      (write-char #\space stream)
+      (pprint-newline :fill stream)
+      (write-string "with data " stream)
+      (pprint-logical-block (stream nil)
+        (iter (for arg in args)
+          (unless (first-time-p)
+            (write-char #\space stream)
+            (pprint-newline :fill stream))
+          (write-as-pseudocode arg stream))))))
