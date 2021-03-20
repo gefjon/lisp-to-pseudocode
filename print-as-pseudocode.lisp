@@ -1,6 +1,33 @@
 (uiop:define-package print-as-pseudocode/print-as-pseudocode
   (:nicknames print-as-pseudocode)
-  (:export print-as-pseudocode translate-file)
+  (:export
+   ;;; External API
+   print-as-pseudocode translate-file
+
+   ;;; Exported to allow defining new forms
+   ;; define a form
+   define-form
+
+   ;; print subforms
+   write-as-pseudocode
+
+   ;; print symbols
+   normalize-identifier
+
+   ;; print fndefs
+   write-defun write-lambda-lists
+
+   ;; print funcalls
+   write-arglist
+
+   ;; print scopes
+   with-block write-local-bindings write-progn
+
+   ;; operators
+   write-infix write-prefix
+
+   ;; keyword argument invocations
+   with-kwarg write-kwarg)
   (:import-from fiveam
                 def-test def-suite is is-true is-false)
   (:import-from alexandria
@@ -12,15 +39,18 @@
 
 (declaim (optimize (debug 3)))
 
-(defgeneric write-as-pseudocode (object stream))
+(defgeneric write-as-pseudocode (object stream)
+  (:documentation "Internal; should only be invoked by `print-as-pseudocode' or recursively by itself."))
 
 (defun print-as-pseudocode (object &optional (stream *standard-output*))
+  "Print OBJECT to STREAM as a form of pseudocode."
   (fresh-line stream)
   (pprint-logical-block (stream nil)
     (write-as-pseudocode object stream)
     (pprint-newline :mandatory stream)))
 
 (defun translate-file (source-file destination-file)
+  "Treat SOURCE-FILE as a Lisp source file; create DESTINATION-FILE containing pseudocode which approximates it."
   (with-open-file (out destination-file
                        :direction :output
                        :if-exists :supersede)
@@ -54,6 +84,7 @@
   (values))
 
 (defun normalize-identifier (ident)
+  "Replace un-C-like characters in the string IDENT with underscores."
   (substitute-if #\_ (rcurry #'member '(#\. #\- #\/ #\*) :test #'char=)
                  (string-downcase ident)))
 
@@ -743,3 +774,12 @@
             (write-char #\space stream)
             (pprint-newline :fill stream))
           (write-as-pseudocode arg stream))))))
+
+(define-form (define-form (head &rest tail) (stream-name) &body body) (stream)
+  (declare (ignore stream-name))
+  (write-string "to print a " stream)
+  (write-as-pseudocode head stream)
+  (write-string " form with arguments " stream)
+  (write-arglist tail stream)
+  (write-char #\space stream)
+  (write-progn body stream))
