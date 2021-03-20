@@ -1,0 +1,39 @@
+* Print Common Lisp as C-ish Pseudocode
+  I was recently in the unfortunate position of being told by the professor for my
+  algorithms course that the graders were unable to read my homework because it was
+  written in Common Lisp, and could I please just write in pseudocode like the assignments
+  asked, or at least use a language from the school's curriculum like Python. Being the
+  understanding, easy-to-work-with student I am, I told him that I would sooner die. But
+  then I realized that there was an obvious solution which would blend together my three
+  great loves: metaprogramming, Github stars and not failing classes. So I wrote this
+  tool, based on Dick Waters' paper "Using the New Common Lisp Pretty Printer", which
+  translates either Lisp source snippets into a form readable by those who haven't drunk
+  the S-expression Kool-aid.
+
+  Focus is placed on making the intention of the code clear, not on preserving its full
+  semantics.
+
+  At this stage, it understands how to print the forms which I've used in my homework,
+  including a sizable subset of the specification, most of [[https://common-lisp.net/project/iterate/][Iterate]], enough of [[https://common-lisp.net/project/fiveam/][FiveAM]], a
+  tiny bit of [[https://common-lisp.net/project/alexandria/][Alexandria]], and parts of [[https://github.com/gefjon/gefjon-utils][my fast-changing and rarely-documented personal
+  utilities library]]. 
+
+  To use, install the dependencies with Quicklisp or whatever, load the system
+  ~"print-as-pseudocode"~ with ASDF, and then invoke ~(print-as-pseudocode:translate-file
+  SOURCE-PATH-DESIGNATOR OUT-PATH-DESIGNATOR)~ to translate a whole file, or
+  ~(print-as-pseudocode:print-as-pseudocode THING STREAM?)~ to translate a single form.
+** Obvious deficiencies
+   If you can fix any of these, please submit a PR. If you can think of a satisfying way
+   to fix the conceptually hard ones, please open an issue describing how you would fix
+   it, even if you don't want to write the code yourself.
+   
+   - Any unrecognized form is printed as a function call.
+   - I've been unable (read: haven't tried very hard) to print ~&key~ arguments in
+     function calls; instead my strategy has basically been to special-case every
+     keyword-argument function I've used. Complication: must not break keywords as normal
+     function parameters.
+   - No understanding of macro invocations.
+   - Gives up on backquote and comma, printing them as S-expressions.
+   - Currently only tested in SBCL.
+   - Many standard forms not recognized.
+   - ~let~, ~flet~ and other parallel operators are printed in sequence.
