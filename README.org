@@ -37,3 +37,4 @@
    - Currently only tested in SBCL.
    - Many standard forms not recognized.
    - ~let~, ~flet~ and other parallel operators are printed in sequence.
+   - Dotted lists break everything.

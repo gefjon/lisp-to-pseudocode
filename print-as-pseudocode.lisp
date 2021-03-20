@@ -216,17 +216,16 @@
   (values))
 
 (defun write-as-nested-lists (seq stream)
-  (etypecase seq
-    ((or symbol number) (write-as-pseudocode seq stream))
-    (sequence 
-     (write-char #\[ stream)
-     (pprint-logical-block (stream nil)
-       (iter (for elt in-sequence seq)
-         (unless (first-time-p)
-           (write-string ", " stream)
-           (pprint-newline :fill stream))
-         (write-as-nested-lists elt stream)))
-     (write-char #\] stream)))
+  (if (typep seq '(and sequence (not string)))
+      (progn (write-char #\[ stream)
+             (pprint-logical-block (stream nil)
+               (iter (for elt in-sequence seq)
+                 (unless (first-time-p)
+                   (write-string ", " stream)
+                   (pprint-newline :fill stream))
+                 (write-as-nested-lists elt stream)))
+             (write-char #\] stream))
+      (write-as-pseudocode seq stream))
   (values))
 
 (defmethod write-as-pseudocode ((vector vector) stream)
@@ -434,19 +433,28 @@
 (define-form (next-iteration) (stream)
   (write-string "continue" stream))
 
-(defun write-iter-form (stream head thing other-things)
-  (write-as-pseudocode head stream)
-  (write-char #\space stream)
-  (write-as-pseudocode thing stream)
-  (write-char #\space stream)
+(defun write-as-iter-preposition-pairs (params stream)
   (pprint-logical-block (stream nil)
-    (iter (for (preposition value) on other-things by #'cddr)
+    (iter (for (preposition value) on params by #'cddr)
       (unless (first-time-p)
         (write-char #\space stream)
         (pprint-newline :fill stream))
       (write-as-pseudocode preposition stream)
       (write-char #\space stream)
-      (write-as-pseudocode value stream)))
+      (write-as-pseudocode value stream))))
+
+(define-form (for pattern &rest stuff) (stream)
+  (write-string "for " stream)
+  (write-as-nested-lists pattern stream)
+  (write-char #\space stream)
+  (write-as-iter-preposition-pairs stuff stream))
+
+(defun write-iter-form (stream head thing other-things)
+  (write-as-pseudocode head stream)
+  (write-char #\space stream)
+  (write-as-pseudocode thing stream)
+  (write-char #\space stream)
+  (write-as-iter-preposition-pairs other-things stream)
   (values))
 
 (defmacro define-iter-forms (&rest heads)
@@ -457,7 +465,7 @@
 
 (define-iter-forms
   ;; variable bindings
-  for with
+  with
   ;; reductions
   sum summing
   multiply multiplying
